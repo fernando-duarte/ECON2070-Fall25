@@ -1,3 +1,88 @@
 Resources/
 .DS_Store
 C*.md
+.Renviron
+
+# LaTeX temporary files
+*.aux
+*.lof
+*.log
+*.lot
+*.fls
+*.out
+*.toc
+*.fmt
+*.fot
+*.cb
+*.cb2
+.*.lb
+
+# LaTeX intermediate files
+*.dvi
+*.xdv
+*-converted-to.*
+
+# Bibliography auxiliary files
+*.bbl
+*.bcf
+*.blg
+*-blx.aux
+*-blx.bib
+*.run.xml
+
+# Build tool auxiliary files
+*.fdb_latexmk
+*.synctex
+*.synctex(busy)
+*.synctex.gz
+*.synctex.gz(busy)
+*.pdfsync
+
+# Index files
+*.idx
+*.ilg
+*.ind
+
+# Beamer
+*.nav
+*.pre
+*.snm
+*.vrb
+
+# Glossaries
+*.acn
+*.acr
+*.glg
+*.glo
+*.gls
+*.glsdefs
+*.lzo
+*.lzs
+*.slg
+*.slo
+*.sls
+
+# PDF output - comment out if you want to track PDFs
+*.pdf
+
+# LaTeX save errors and conflicts
+*-SAVE-ERROR
+*.bbl-SAVE-ERROR
+*.bcf-SAVE-ERROR
+*conflicted copy*
+
+# Editor backup files
+*~
+*.backup
+*.bak
+*.tmp
+*.temp
+.~lock.*
+
+# Other build artifacts
+*.dpth
+*.md5
+*.auxlock
+*.figlist
+*.makefile
+*.xref
