@@ -1,6 +1,14 @@
-# Package management: auto-install if needed
-if (!require("pacman")) install.packages("pacman")
-pacman::p_load(fredr, tidyverse, lubridate, zoo, mFilter, vars, patchwork, xtable, scales)
+suppressPackageStartupMessages({
+  library(fredr)
+  library(tidyverse)
+  library(lubridate)
+  library(zoo)
+  library(mFilter)
+  library(vars)
+  library(patchwork)
+  library(xtable)
+  library(scales)
+})
 
 # -----------------------------------------------------------------------------
 # Setup
@@ -20,29 +28,30 @@ dir.create("tables", showWarnings = FALSE, recursive = TRUE)
 # Helper: safe fred getter -----------------------------------------------------
 fred_m <- function(id, start = as.Date("1890-01-01"), end = Sys.Date()) {
   fredr(series_id = id, observation_start = start, observation_end = end) |>
-    select(date, value) |>
-    arrange(date)
+    dplyr::select(date, value) |>
+    dplyr::arrange(date)
 }
 
 fred_q <- function(id, start = as.Date("1947-01-01"), end = Sys.Date()) {
   fredr(series_id = id, observation_start = start, observation_end = end) |>
-    select(date, value) |>
-    arrange(date)
+    dplyr::select(date, value) |>
+    dplyr::arrange(date)
 }
 
 to_quarterly_mean <- function(df) {
   df |>
-    mutate(q = yearquarter(date)) |>
+    mutate(q = zoo::as.yearqtr(date)) |>
     group_by(q) |>
     summarize(value = mean(value, na.rm = TRUE), .groups = "drop") |>
-    transmute(date = as.Date(as.yearqtr(q)), value = value)
+    mutate(date = as.Date(q)) |>
+    dplyr::select(date, value)
 }
 
 to_quarterly_last <- function(df) {
   df |>
-    mutate(q = yearquarter(date)) |>
+    mutate(q = zoo::as.yearqtr(date)) |>
     group_by(q) |>
-    summarize(date = max(date), value = last(value), .groups = "drop")
+    summarize(date = max(date), value = dplyr::last(value), .groups = "drop")
 }
 
 lagdiff <- function(x, k = 1) {
@@ -53,20 +62,8 @@ lagdiff <- function(x, k = 1) {
 # Long-run context: unemployment and inflation
 # -----------------------------------------------------------------------------
 
-# Unemployment: stitch historical with BLS series
-u_hist <- fred_m("M089URALLUSM156N") # historical unemployment rate
-u_bls <- fred_m("UNRATE") # BLS unemployment rate, since 1948
-
-u_combined <- full_join(
-  u_hist |>
-    rename(u_hist = value),
-  u_bls |>
-    rename(u_bls = value),
-  by = "date"
-) |>
-  mutate(value = if_else(!is.na(u_bls), u_bls, u_hist)) |>
-  select(date, value) |>
-  drop_na()
+# Unemployment rate - UNRATE goes back to 1948
+u_combined <- fred_m("UNRATE", start = as.Date("1948-01-01"))
 
 p_unemp <- ggplot(u_combined, aes(x = date, y = value)) +
   geom_line(linewidth = 0.4) +
@@ -154,7 +151,7 @@ ggsave("figures/fig_gdp_trend_panels.pdf", g_trend,
 
 # Detrended overlay
 gdp_long <- gdp |>
-  select(date, res_linear, res_quadratic, res_hp_1600, res_hp_16) |>
+  dplyr::select(date, res_linear, res_quadratic, res_hp_1600, res_hp_16) |>
   pivot_longer(-date, names_to = "method", values_to = "value") |>
   mutate(method = recode(method,
     res_linear    = "Linear trend",
@@ -175,12 +172,11 @@ ggsave("figures/fig_gdp_detrended_overlay.pdf", p_detr,
 )
 
 # Christiano-Fitzgerald bandpass components
-cf <- mFilter::cffilter(gdp$logy, pl = 6, pu = 32, root = TRUE, drift = TRUE)
+cf <- mFilter::cffilter(gdp$logy, pl = 6, pu = 20, root = TRUE, drift = TRUE)
 cf_df <- tibble(
   date = gdp$date,
   cycle = as.numeric(cf$cycle),
-  trend = as.numeric(cf$trend),
-  irregular = as.numeric(cf$irregular)
+  trend = as.numeric(cf$trend)
 )
 
 p_cycle <- ggplot(cf_df, aes(date, cycle)) +
@@ -194,13 +190,7 @@ p_trend <- ggplot(cf_df, aes(date, trend)) +
   labs(title = "Bandpass-Filtered GDP (Trend)", x = NULL, y = NULL) +
   theme_minimal()
 
-p_irreg <- ggplot(cf_df, aes(date, irregular)) +
-  geom_hline(yintercept = 0, linewidth = 0.2) +
-  geom_line(linewidth = 0.4) +
-  labs(title = "Bandpass-Filtered GDP (Irregular)", x = NULL, y = NULL) +
-  theme_minimal()
-
-g_cff <- (p_cycle / p_trend / p_irreg)
+g_cff <- (p_cycle / p_trend)
 ggsave("figures/fig_gdp_cffilter_components.pdf", g_cff,
   width = 9, height = 8.5, units = "in"
 )
@@ -271,11 +261,11 @@ real_wage <- ahetpi |>
     by = "date"
   ) |>
   mutate(value = ahetpi / cpi) |>
-  select(date, value)
+  dplyr::select(date, value)
 
 # Merge quarterly panel
 qpanel <- gdp |>
-  select(date, gdp, logy) |>
+  dplyr::select(date, gdp, logy) |>
   inner_join(
     pce |> rename(pce = value),
     by = "date"
@@ -330,45 +320,62 @@ qpanel <- gdp |>
   ) |>
   drop_na()
 
-# Cycle extraction with CF filter
+# Cycle extraction with CF filter (adjusted for available data)
 cf_x <- function(x) {
-  mFilter::cffilter(log(x), pl = 6, pu = 32, root = TRUE, drift = TRUE)$cycle
+  # Check if we have enough observations
+  if (length(x) < 41) {
+    warning(paste("Series too short for CF filter:", length(x), "observations"))
+    return(rep(NA, length(x)))
+  }
+  mFilter::cffilter(log(x), pl = 6, pu = 20, root = TRUE, drift = TRUE)$cycle
 }
 cf_level <- function(x) {
-  mFilter::cffilter(x, pl = 6, pu = 32, root = TRUE, drift = TRUE)$cycle
+  if (length(x) < 41) {
+    warning(paste("Series too short for CF filter:", length(x), "observations"))
+    return(rep(NA, length(x)))
+  }
+  mFilter::cffilter(x, pl = 6, pu = 20, root = TRUE, drift = TRUE)$cycle
 }
 
-cyc <- qpanel |>
-  transmute(
-    date = date,
-    y_cyc = cf_x(gdp),
-    pce_cyc = cf_x(pce),
-    gpdi_cyc = cf_x(gpdi),
-    cbi_cyc = cf_level(cbi), # can be negative, treat as level
-    expgs_cyc = cf_x(expgs),
-    gce_cyc = cf_x(gce),
-    payems_cyc = cf_level(payems),
-    awhman_cyc = cf_level(awhman),
-    realw_cyc = cf_level(realw),
-    pi_cyc = cf_level(pi_gdpdef),
-    ff_cyc = cf_level(ff),
-    r10_cyc = cf_level(r10_expost),
-    sp500_cyc = cf_level(sp500)
-  ) |>
+# Apply CF filter to each column separately
+cyc <- tibble(
+  date = qpanel$date,
+  y_cyc = as.numeric(cf_x(qpanel$gdp)),
+  pce_cyc = as.numeric(cf_x(qpanel$pce)),
+  gpdi_cyc = as.numeric(cf_x(qpanel$gpdi)),
+  cbi_cyc = as.numeric(cf_level(qpanel$cbi)), # can be negative, treat as level
+  expgs_cyc = as.numeric(cf_x(qpanel$expgs)),
+  gce_cyc = as.numeric(cf_x(qpanel$gce)),
+  payems_cyc = as.numeric(cf_level(qpanel$payems)),
+  awhman_cyc = as.numeric(cf_level(qpanel$awhman)),
+  realw_cyc = as.numeric(cf_level(qpanel$realw)),
+  pi_cyc = as.numeric(cf_level(qpanel$pi_gdpdef)),
+  ff_cyc = as.numeric(cf_level(qpanel$ff)),
+  r10_cyc = as.numeric(cf_level(qpanel$r10_expost)),
+  sp500_cyc = as.numeric(cf_level(qpanel$sp500))
+) |>
   drop_na()
 
 # Cross-correlation table with leads/lags -6..+6
 lag_leads <- -6:6
 
 ccf_row <- function(x, y, lags = lag_leads) {
+  # Check for sufficient data
+  if (length(x) < 10 || length(y) < 10) {
+    warning("Insufficient data for cross-correlation")
+    return(rep(NA, length(lags)))
+  }
+  
   vapply(lags, function(ell) {
     if (ell >= 0) {
+      if (ell >= length(x)) return(NA)
       stats::cor(
         x[(1 + ell):length(x)], y[1:(length(y) - ell)],
         use = "pairwise.complete.obs"
       )
     } else {
       ellp <- abs(ell)
+      if (ellp >= length(x)) return(NA)
       stats::cor(
         x[1:(length(x) - ellp)], y[(1 + ellp):length(y)],
         use = "pairwise.complete.obs"
@@ -406,7 +413,7 @@ ccf_tbl <- bind_rows(rows) |>
 # Reshape to wide table for LaTeX
 wide <- ccf_tbl |>
   mutate(lag = as.character(lag)) |>
-  select(series, stddev_rel_to_y, lag, corr) |>
+  dplyr::select(series, stddev_rel_to_y, lag, corr) |>
   pivot_wider(names_from = lag, values_from = corr) |>
   arrange(series)
 
@@ -423,7 +430,8 @@ tab <- xtable(wide_print,
   label = "tab:ccf"
 )
 
-align(tab) <- "lrrrrrrrrrrrrrrrr"
+# Set alignment dynamically based on number of columns
+align(tab) <- paste0("l", paste(rep("r", ncol(wide_print)), collapse = ""))
 print(tab,
   file = "tables/table_ccf.tex",
   include.rownames = FALSE,
@@ -459,7 +467,7 @@ monthly <- monthly |>
     m2 = log(m2),
     ff = ff
   ) |>
-  select(date, y, p, pcom, ff, tr, m2) |>
+  dplyr::select(date, y, p, pcom, ff, tr, m2) |>
   drop_na()
 
 # baseline sample - can extend beyond 2007 (M1 definitional issues avoided)
@@ -469,7 +477,7 @@ monthly_sub <- monthly |>
 # estimate VAR with 12 lags
 v <- vars::VAR(
   monthly_sub |>
-    select(y, p, pcom, ff, tr, m2),
+    dplyr::select(y, p, pcom, ff, tr, m2),
   p = 12, type = "const"
 )
 
