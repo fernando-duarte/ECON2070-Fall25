@@ -169,38 +169,38 @@ gdp <- gdp |>
 
 # Four-panel plot: log y with trends
 p1 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
-  geom_line(aes(y = fit_linear, color = "Trend"), linewidth = 1.0) +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.8) +
+  geom_line(aes(y = fit_linear, color = "Trend"), linewidth = 0.6) +
   labs(title = "Linear Time Trend", x = NULL, y = "Log Real GDP") +
   theme_publication(base_size = 12) +
-  scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_highlight),
+  scale_color_manual(values = c("Actual" = "black", "Trend" = color_secondary),
                      name = "") +
   theme(legend.position = "none")
 
 p2 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
-  geom_line(aes(y = hp_trend_1600, color = "Trend"), linewidth = 1.0) +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.8) +
+  geom_line(aes(y = hp_trend_1600, color = "Trend"), linewidth = 0.6) +
   labs(title = "HP Filter (lambda=1600)", x = NULL, y = NULL) +
   theme_publication(base_size = 12) +
-  scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_highlight),
+  scale_color_manual(values = c("Actual" = "black", "Trend" = color_secondary),
                      name = "") +
   theme(legend.position = "none")
 
 p3 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
-  geom_line(aes(y = fit_quadratic, color = "Trend"), linewidth = 1.0) +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.8) +
+  geom_line(aes(y = fit_quadratic, color = "Trend"), linewidth = 0.6) +
   labs(title = "Quadratic Trend", x = "Date", y = "Log Real GDP") +
   theme_publication(base_size = 12) +
-  scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_secondary),
+  scale_color_manual(values = c("Actual" = "black", "Trend" = color_secondary),
                      name = "") +
   theme(legend.position = "none")
 
 p4 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
-  geom_line(aes(y = hp_trend_6.25, color = "Trend"), linewidth = 1.0) +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.8) +
+  geom_line(aes(y = hp_trend_6.25, color = "Trend"), linewidth = 0.6) +
   labs(title = "HP Filter (lambda=6.25)", x = "Date", y = NULL) +
   theme_publication(base_size = 12) +
-  scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_secondary),
+  scale_color_manual(values = c("Actual" = "black", "Trend" = color_secondary),
                      name = "") +
   theme(legend.position = "bottom")
 
@@ -313,6 +313,49 @@ ggsave("figures/fig_irf_ar_linear_vs_quadratic.svg", p_irf_ar,
 ggsave("figures/fig_irf_ar_linear_vs_quadratic.pdf", p_irf_ar,
   width = 9, height = 5.5, units = "in", dpi = 300
 )
+
+# -----------------------------------------------------------------------------
+# Rolling standard deviation of GDP growth (Great Moderation)
+# -----------------------------------------------------------------------------
+
+# Calculate quarterly GDP growth rates (annualized)
+gdp_growth <- gdp |>
+  mutate(
+    gdp_growth = 400 * (log(gdp) - lag(log(gdp), 1))  # Annualized quarterly growth rate
+  ) |>
+  drop_na(gdp_growth)
+
+# Calculate 20-quarter (5-year) rolling standard deviation
+# This window effectively shows the Great Moderation period
+gdp_rolling_sd <- gdp_growth |>
+  mutate(
+    rolling_sd = zoo::rollapply(gdp_growth, width = 20, FUN = sd, fill = NA, align = "center")
+  ) |>
+  drop_na(rolling_sd)
+
+# Create the plot
+p_gdp_volatility <- ggplot(gdp_rolling_sd, aes(x = date, y = rolling_sd)) +
+  geom_line(linewidth = 1.0, color = color_highlight) +
+  geom_ribbon(aes(ymin = 0, ymax = rolling_sd), fill = color_highlight, alpha = 0.2) +
+  labs(
+    x = "Date", 
+    y = "Standard Deviation (%)", 
+    title = "Rolling Standard Deviation of Real GDP Growth",
+    subtitle = "20-Quarter Rolling Window, Annualized Growth Rates"
+  ) +
+  theme_publication() +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) +
+  scale_x_date(date_labels = "%Y", date_breaks = "10 years")
+
+ggsave("figures/fig_gdp_growth_volatility.svg", p_gdp_volatility,
+  width = 10, height = 5.5, units = "in", dpi = 300
+)
+ggsave("figures/fig_gdp_growth_volatility.pdf", p_gdp_volatility,
+  width = 10, height = 5.5, units = "in", dpi = 300
+)
+
+# -----------------------------------------------------------------------------
+
 
 # -----------------------------------------------------------------------------
 # Cross-correlations with cyclical GDP (Stock-Watson style table)
@@ -676,7 +719,7 @@ irf_df$label <- labels[irf_df$variable]
 p_irf <- ggplot(irf_df, aes(h, irf)) +
   geom_ribbon(aes(ymin = low, ymax = high), fill = color_highlight, alpha = 0.25) +
   geom_hline(yintercept = 0, linewidth = 0.5, linetype = "dashed", color = "gray40") +
-  geom_line(linewidth = 1.0, color = color_highlight) +
+  geom_line(linewidth = 1.0, color = color_secondary) +
   facet_wrap(~label, scales = "free_y", ncol = 3) +
   labs(
     x = "Months After Shock", y = "Response",
