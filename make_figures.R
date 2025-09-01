@@ -8,6 +8,7 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(xtable)
   library(scales)
+  library(svglite)
 })
 
 # -----------------------------------------------------------------------------
@@ -70,6 +71,9 @@ p_unemp <- ggplot(u_combined, aes(x = date, y = value)) +
   labs(x = "Date", y = "Percent", title = "U.S. unemployment rate (monthly)") +
   theme_minimal()
 
+ggsave("figures/fig_unemployment_long.svg", p_unemp,
+  width = 9, height = 4.8, units = "in"
+)
 ggsave("figures/fig_unemployment_long.pdf", p_unemp,
   width = 9, height = 4.8, units = "in"
 )
@@ -86,6 +90,9 @@ p_infl <- ggplot(infl, aes(date, infl_yoy)) +
   labs(x = "Date", y = "Percent", title = "CPI inflation, year over year") +
   theme_minimal()
 
+ggsave("figures/fig_inflation_cpi.svg", p_infl,
+  width = 9, height = 4.8, units = "in"
+)
 ggsave("figures/fig_inflation_cpi.pdf", p_infl,
   width = 9, height = 4.8, units = "in"
 )
@@ -145,6 +152,9 @@ p4 <- ggplot(gdp, aes(date)) +
   theme_minimal()
 
 g_trend <- (p1 | p2) / (p3 | p4)
+ggsave("figures/fig_gdp_trend_panels.svg", g_trend,
+  width = 10, height = 7.2, units = "in"
+)
 ggsave("figures/fig_gdp_trend_panels.pdf", g_trend,
   width = 10, height = 7.2, units = "in"
 )
@@ -167,6 +177,9 @@ p_detr <- ggplot(gdp_long, aes(date, value, linetype = method)) +
   theme_minimal() +
   theme(legend.position = "bottom")
 
+ggsave("figures/fig_gdp_detrended_overlay.svg", p_detr,
+  width = 9, height = 4.8, units = "in"
+)
 ggsave("figures/fig_gdp_detrended_overlay.pdf", p_detr,
   width = 9, height = 4.8, units = "in"
 )
@@ -191,6 +204,9 @@ p_trend <- ggplot(cf_df, aes(date, trend)) +
   theme_minimal()
 
 g_cff <- (p_cycle / p_trend)
+ggsave("figures/fig_gdp_cffilter_components.svg", g_cff,
+  width = 9, height = 8.5, units = "in"
+)
 ggsave("figures/fig_gdp_cffilter_components.pdf", g_cff,
   width = 9, height = 8.5, units = "in"
 )
@@ -227,6 +243,9 @@ p_irf_ar <- ggplot(irf_ar, aes(h, irf, linetype = spec)) +
   theme_minimal() +
   theme(legend.position = "bottom")
 
+ggsave("figures/fig_irf_ar_linear_vs_quadratic.svg", p_irf_ar,
+  width = 8, height = 4.5, units = "in"
+)
 ggsave("figures/fig_irf_ar_linear_vs_quadratic.pdf", p_irf_ar,
   width = 8, height = 4.5, units = "in"
 )
@@ -360,26 +379,31 @@ cyc <- tibble(
 lag_leads <- -6:6
 
 ccf_row <- function(x, y, lags = lag_leads) {
+  # Remove NAs from both series
+  valid <- complete.cases(x, y)
+  x_clean <- x[valid]
+  y_clean <- y[valid]
+  
   # Check for sufficient data
-  if (length(x) < 10 || length(y) < 10) {
-    warning("Insufficient data for cross-correlation")
+  if (length(x_clean) < 30) {
+    warning(paste("Insufficient data for cross-correlation:", length(x_clean), "observations"))
     return(rep(NA, length(lags)))
   }
   
   vapply(lags, function(ell) {
-    if (ell >= 0) {
-      if (ell >= length(x)) return(NA)
-      stats::cor(
-        x[(1 + ell):length(x)], y[1:(length(y) - ell)],
-        use = "pairwise.complete.obs"
-      )
-    } else {
+    n <- length(x_clean)
+    if (abs(ell) >= n - 5) return(NA)  # Need at least 5 observations
+    
+    if (ell > 0) {
+      # Positive lag: x leads y by ell periods
+      cor(x_clean[1:(n - ell)], y_clean[(1 + ell):n], use = "complete.obs")
+    } else if (ell < 0) {
+      # Negative lag: y leads x by |ell| periods
       ellp <- abs(ell)
-      if (ellp >= length(x)) return(NA)
-      stats::cor(
-        x[1:(length(x) - ellp)], y[(1 + ellp):length(y)],
-        use = "pairwise.complete.obs"
-      )
+      cor(x_clean[(1 + ellp):n], y_clean[1:(n - ellp)], use = "complete.obs")
+    } else {
+      # Zero lag: contemporaneous correlation
+      cor(x_clean, y_clean, use = "complete.obs")
     }
   }, numeric(1))
 }
@@ -387,10 +411,10 @@ ccf_row <- function(x, y, lags = lag_leads) {
 series <- names(cyc)[-c(1, 2)]
 
 rows <- lapply(series, function(s) {
-  x <- cyc$y_cyc
-  y <- cyc[[s]]
-  cc <- ccf_row(x, y, lag_leads)
-  sdrel <- sd(y, na.rm = TRUE) / sd(x, na.rm = TRUE)
+  y <- cyc$y_cyc  # GDP is y, series is x for correlation
+  x <- cyc[[s]]    # The series we're correlating with GDP
+  cc <- ccf_row(y, x, lag_leads)  # Pass GDP first, series second
+  sdrel <- sd(x, na.rm = TRUE) / sd(y, na.rm = TRUE)  # series SD relative to GDP SD
   tibble(series = s, stddev_rel_to_y = sdrel, lag = lag_leads, corr = cc)
 })
 
@@ -420,6 +444,9 @@ wide <- ccf_tbl |>
 # Round for presentation
 wide_print <- wide |>
   mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+# Fix column names for LaTeX (escape underscores)
+names(wide_print)[names(wide_print) == "stddev_rel_to_y"] <- "StdDev"
 
 # Write LaTeX table
 tab <- xtable(wide_print,
@@ -482,7 +509,8 @@ v <- vars::VAR(
 )
 
 # scale to a 100bp shock
-sd_ff <- sqrt(diag(v$covresid)["ff"])
+v_summary <- summary(v)
+sd_ff <- sqrt(v_summary$covres["ff", "ff"])
 scale <- 1.00 / sd_ff
 
 ir <- irf(v,
@@ -526,6 +554,9 @@ p_irf <- ggplot(irf_df, aes(h, irf)) +
   ) +
   theme_minimal()
 
+ggsave("figures/fig_mp_irf_grid.svg", p_irf,
+  width = 10, height = 8.5, units = "in"
+)
 ggsave("figures/fig_mp_irf_grid.pdf", p_irf,
   width = 10, height = 8.5, units = "in"
 )
