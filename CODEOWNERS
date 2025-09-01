@@ -1,0 +1,3 @@
+# Protection for Overleaf submodule configuration
+.gitmodules      @fernando-duarte
+/Overleaf/       @fernando-duarte
