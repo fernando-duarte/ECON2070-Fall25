@@ -1,4 +1,5 @@
 {
+  "explorer.excludeGitIgnore": false,
   "files.exclude": {
     "**/*.aux": true,
     "**/*.lof": true,
