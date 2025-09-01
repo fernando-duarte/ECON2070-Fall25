@@ -1,6 +1,8 @@
 Resources/
 .DS_Store
 C*.md
+CLAUDE.md
+**/CLAUDE.md
 .Renviron
 
 # LaTeX temporary files

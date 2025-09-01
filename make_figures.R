@@ -151,24 +151,26 @@ fit_lin <- lm(logy ~ t, data = gdp)
 fit_quad <- lm(logy ~ t + I(t^2), data = gdp)
 
 hp_1600 <- mFilter::hpfilter(gdp$logy, freq = 1600, type = "lambda")
-hp_16 <- mFilter::hpfilter(gdp$logy, freq = 16, type = "lambda")
+# Using lambda=6.25 (Ravn-Uhlig 2002 recommendation for annual-equivalent smoothing)
+# This provides much more aggressive smoothing than the standard 1600
+hp_6.25 <- mFilter::hpfilter(gdp$logy, freq = 6.25, type = "lambda")
 
 gdp <- gdp |>
   mutate(
     fit_linear = as.numeric(fitted(fit_lin)),
     fit_quadratic = as.numeric(fitted(fit_quad)),
     hp_trend_1600 = as.numeric(hp_1600$trend),
-    hp_trend_16 = as.numeric(hp_16$trend),
+    hp_trend_6.25 = as.numeric(hp_6.25$trend),
     res_linear = logy - fit_linear,
     res_quadratic = logy - fit_quadratic,
     res_hp_1600 = as.numeric(hp_1600$cycle),
-    res_hp_16 = as.numeric(hp_16$cycle)
+    res_hp_6.25 = as.numeric(hp_6.25$cycle)
   )
 
 # Four-panel plot: log y with trends
 p1 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 0.8) +
-  geom_line(aes(y = fit_linear, color = "Trend"), linewidth = 1.0, linetype = "dashed") +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
+  geom_line(aes(y = fit_linear, color = "Trend"), linewidth = 1.0) +
   labs(title = "Linear Time Trend", x = NULL, y = "Log Real GDP") +
   theme_publication(base_size = 12) +
   scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_highlight),
@@ -176,8 +178,8 @@ p1 <- ggplot(gdp, aes(date)) +
   theme(legend.position = "none")
 
 p2 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 0.8) +
-  geom_line(aes(y = hp_trend_1600, color = "Trend"), linewidth = 1.0, linetype = "dashed") +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
+  geom_line(aes(y = hp_trend_1600, color = "Trend"), linewidth = 1.0) +
   labs(title = "HP Filter (lambda=1600)", x = NULL, y = NULL) +
   theme_publication(base_size = 12) +
   scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_highlight),
@@ -185,8 +187,8 @@ p2 <- ggplot(gdp, aes(date)) +
   theme(legend.position = "none")
 
 p3 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 0.8) +
-  geom_line(aes(y = fit_quadratic, color = "Trend"), linewidth = 1.0, linetype = "dashed") +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
+  geom_line(aes(y = fit_quadratic, color = "Trend"), linewidth = 1.0) +
   labs(title = "Quadratic Trend", x = "Date", y = "Log Real GDP") +
   theme_publication(base_size = 12) +
   scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_secondary),
@@ -194,9 +196,9 @@ p3 <- ggplot(gdp, aes(date)) +
   theme(legend.position = "none")
 
 p4 <- ggplot(gdp, aes(date)) +
-  geom_line(aes(y = logy, color = "Actual"), linewidth = 0.8) +
-  geom_line(aes(y = hp_trend_16, color = "Trend"), linewidth = 1.0, linetype = "dashed") +
-  labs(title = "HP Filter (lambda=16)", x = "Date", y = NULL) +
+  geom_line(aes(y = logy, color = "Actual"), linewidth = 1.2) +
+  geom_line(aes(y = hp_trend_6.25, color = "Trend"), linewidth = 1.0) +
+  labs(title = "HP Filter (lambda=6.25)", x = "Date", y = NULL) +
   theme_publication(base_size = 12) +
   scale_color_manual(values = c("Actual" = "gray30", "Trend" = color_secondary),
                      name = "") +
@@ -212,13 +214,13 @@ ggsave("figures/fig_gdp_trend_panels.pdf", g_trend,
 
 # Detrended overlay
 gdp_long <- gdp |>
-  dplyr::select(date, res_linear, res_quadratic, res_hp_1600, res_hp_16) |>
+  dplyr::select(date, res_linear, res_quadratic, res_hp_1600, res_hp_6.25) |>
   pivot_longer(-date, names_to = "method", values_to = "value") |>
   mutate(method = recode(method,
     res_linear    = "Linear trend",
     res_quadratic = "Quadratic trend",
     res_hp_1600   = "HP lambda=1600",
-    res_hp_16     = "HP lambda=16"
+    res_hp_6.25   = "HP lambda=6.25"
   ))
 
 p_detr <- ggplot(gdp_long, aes(date, value, color = method)) +
@@ -240,7 +242,8 @@ ggsave("figures/fig_gdp_detrended_overlay.pdf", p_detr,
 )
 
 # Christiano-Fitzgerald bandpass components
-cf <- mFilter::cffilter(gdp$logy, pl = 6, pu = 20, root = TRUE, drift = TRUE)
+# Using standard business cycle frequencies: pl=6 (1.5 years), pu=32 (8 years) for quarterly data
+cf <- mFilter::cffilter(gdp$logy, pl = 6, pu = 32, root = TRUE, drift = TRUE)
 cf_df <- tibble(
   date = gdp$date,
   cycle = as.numeric(cf$cycle),
@@ -412,7 +415,8 @@ cf_x <- function(x) {
   }
   
   # Apply filter to clean data
-  cycle_clean <- mFilter::cffilter(log(x_clean), pl = 6, pu = 20, root = TRUE, drift = TRUE)$cycle
+  # Using standard business cycle frequencies: pl=6 (1.5 years), pu=32 (8 years)
+  cycle_clean <- mFilter::cffilter(log(x_clean), pl = 6, pu = 32, root = TRUE, drift = TRUE)$cycle
   
   # Map back to original length with NAs
   result <- rep(NA, length(x))
@@ -431,7 +435,8 @@ cf_level <- function(x) {
   }
   
   # Apply filter to clean data
-  cycle_clean <- mFilter::cffilter(x_clean, pl = 6, pu = 20, root = TRUE, drift = TRUE)$cycle
+  # Using standard business cycle frequencies: pl=6 (1.5 years), pu=32 (8 years)
+  cycle_clean <- mFilter::cffilter(x_clean, pl = 6, pu = 32, root = TRUE, drift = TRUE)$cycle
   
   # Map back to original length with NAs
   result <- rep(NA, length(x))
