@@ -4,9 +4,7 @@ suppressPackageStartupMessages({
   library(lubridate)
   library(zoo)
   library(mFilter)
-  library(vars)  # For VAR estimation
   library(patchwork)
-  library(xtable)
   library(scales)
   library(svglite)
   library(viridis)  # For color-blind friendly palettes
@@ -94,14 +92,41 @@ color_palette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
 # Long-run context: unemployment and inflation
 # -----------------------------------------------------------------------------
 
+# Download NBER recession indicator (USREC: 1 = recession, 0 = expansion)
+recessions <- fred_m("USREC", start = as.Date("1945-01-01")) |>
+  rename(recession = value)
+
+# Create recession periods dataframe for shading
+# Group consecutive recession months into periods
+recession_periods <- recessions |>
+  mutate(
+    # Create groups for consecutive recession periods
+    recession_group = cumsum(recession == 1 & lag(recession, default = 0) == 0)
+  ) |>
+  filter(recession == 1) |>
+  group_by(recession_group) |>
+  summarize(
+    start = min(date),
+    end = max(date),
+    .groups = "drop"
+  )
+
 # Unemployment rate - UNRATE goes back to 1948
 u_combined <- fred_m("UNRATE", start = as.Date("1948-01-01"))
 
+# Filter recession periods to match unemployment data range
+recession_periods_unemp <- recession_periods |>
+  filter(end >= min(u_combined$date, na.rm = TRUE))
+
 p_unemp <- ggplot(u_combined, aes(x = date, y = value)) +
+  # Add recession shading first (behind the line)
+  geom_rect(data = recession_periods_unemp,
+            aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf),
+            fill = "gray", alpha = 0.2, inherit.aes = FALSE) +
   geom_line(linewidth = 0.8, color = color_single) +
   labs(x = "Date", y = "Unemployment Rate (%)", 
        title = "U.S. Unemployment Rate",
-       subtitle = "Monthly, 1948-Present") +
+       subtitle = "Monthly, 1948-Present (shaded areas indicate NBER recessions)") +
   theme_publication() +
   scale_y_continuous(breaks = pretty_breaks(n = 6)) +
   scale_x_date(date_labels = "%Y", date_breaks = "10 years")
@@ -119,12 +144,20 @@ infl <- cpi |>
   mutate(infl_yoy = 100 * (log(value) - lag(log(value), 12))) |>
   drop_na()
 
+# Filter recession periods to match inflation data range
+recession_periods_infl <- recession_periods |>
+  filter(end >= min(infl$date, na.rm = TRUE))
+
 p_infl <- ggplot(infl, aes(date, infl_yoy)) +
+  # Add recession shading first (behind the line)
+  geom_rect(data = recession_periods_infl,
+            aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf),
+            fill = "gray", alpha = 0.2, inherit.aes = FALSE) +
   geom_hline(yintercept = 0, linewidth = 0.5, linetype = "dashed", color = "gray40") +
   geom_line(linewidth = 0.8, color = color_highlight) +
   labs(x = "Date", y = "Inflation Rate (%)", 
        title = "U.S. CPI Inflation",
-       subtitle = "Year-over-Year Change") +
+       subtitle = "Year-over-Year Change (shaded areas indicate NBER recessions)") +
   theme_publication() +
   scale_y_continuous(breaks = pretty_breaks(n = 6)) +
   scale_x_date(date_labels = "%Y", date_breaks = "10 years")
@@ -357,384 +390,4 @@ ggsave("figures/fig_gdp_growth_volatility.pdf", p_gdp_volatility,
 # -----------------------------------------------------------------------------
 
 
-# -----------------------------------------------------------------------------
-# Cross-correlations with cyclical GDP (Stock-Watson style table)
-# -----------------------------------------------------------------------------
-
-# Quarterly real components
-pce <- fred_q("PCEC96") |> rename(value = value)
-gpdi <- fred_q("GPDIC1") |> rename(value = value)
-# change in private inventories, real
-cbi <- fred_q("CBIC1") |> rename(value = value)
-expgs <- fred_q("EXPGSC1") |> rename(value = value)
-gce <- fred_q("GCEC1") |> rename(value = value)
-gdpdef <- fred_q("GDPDEF") |> rename(value = value)
-
-# Monthly to quarterly: labor, rates, etc.
-payems <- to_quarterly_mean(fred_m("PAYEMS", start = as.Date("1939-01-01")))
-awhman <- to_quarterly_mean(fred_m("AWHMAN"))
-ahetpi <- to_quarterly_mean(fred_m("AHETPI"))
-cpi_q <- to_quarterly_mean(fred_m("CPIAUCSL"))
-gs10 <- to_quarterly_mean(fred_m("GS10"))
-ff_q <- to_quarterly_mean(fred_m("FEDFUNDS"))
-sp500q <- to_quarterly_last(fred_m("SP500"))
-
-# Real wage: deflate AHETPI by CPI
-real_wage <- ahetpi |>
-  rename(ahetpi = value) |>
-  inner_join(
-    cpi_q |> rename(cpi = value),
-    by = "date"
-  ) |>
-  mutate(value = ahetpi / cpi) |>
-  dplyr::select(date, value)
-
-# Merge quarterly panel
-qpanel <- gdp |>
-  dplyr::select(date, gdp, logy) |>
-  inner_join(
-    pce |> rename(pce = value),
-    by = "date"
-  ) |>
-  inner_join(
-    gpdi |> rename(gpdi = value),
-    by = "date"
-  ) |>
-  inner_join(
-    cbi |> rename(cbi = value),
-    by = "date"
-  ) |>
-  inner_join(
-    expgs |> rename(expgs = value),
-    by = "date"
-  ) |>
-  inner_join(
-    gce |> rename(gce = value),
-    by = "date"
-  ) |>
-  inner_join(
-    payems |> rename(payems = value),
-    by = "date"
-  ) |>
-  inner_join(
-    awhman |> rename(awhman = value),
-    by = "date"
-  ) |>
-  inner_join(
-    real_wage |> rename(realw = value),
-    by = "date"
-  ) |>
-  inner_join(
-    gdpdef |> rename(gdpdef = value),
-    by = "date"
-  ) |>
-  inner_join(
-    ff_q |> rename(ff = value),
-    by = "date"
-  ) |>
-  inner_join(
-    gs10 |> rename(gs10 = value),
-    by = "date"
-  ) |>
-  inner_join(
-    sp500q |> rename(sp500 = value),
-    by = "date"
-  ) |>
-  mutate(
-    pi_gdpdef = 400 * (log(gdpdef) - log(lag(gdpdef, 1))),
-    r10_expost = gs10 - lag(pi_gdpdef, 4)
-  ) |>
-  drop_na()
-
-# Cycle extraction with CF filter (adjusted for available data)
-cf_x <- function(x) {
-  # Remove NA values first
-  x_clean <- x[!is.na(x) & is.finite(x) & x > 0]
-  
-  # Check if we have enough observations
-  if (length(x_clean) < 41) {
-    warning(paste("Series too short for CF filter:", length(x_clean), "observations"))
-    return(rep(NA, length(x)))
-  }
-  
-  # Apply filter to clean data
-  # Using standard business cycle frequencies: pl=6 (1.5 years), pu=32 (8 years)
-  cycle_clean <- mFilter::cffilter(log(x_clean), pl = 6, pu = 32, root = TRUE, drift = TRUE)$cycle
-  
-  # Map back to original length with NAs
-  result <- rep(NA, length(x))
-  result[!is.na(x) & is.finite(x) & x > 0] <- cycle_clean
-  return(result)
-}
-
-cf_level <- function(x) {
-  # Remove NA values first
-  x_clean <- x[!is.na(x) & is.finite(x)]
-  
-  # Check if we have enough observations
-  if (length(x_clean) < 41) {
-    warning(paste("Series too short for CF filter:", length(x_clean), "observations"))
-    return(rep(NA, length(x)))
-  }
-  
-  # Apply filter to clean data
-  # Using standard business cycle frequencies: pl=6 (1.5 years), pu=32 (8 years)
-  cycle_clean <- mFilter::cffilter(x_clean, pl = 6, pu = 32, root = TRUE, drift = TRUE)$cycle
-  
-  # Map back to original length with NAs
-  result <- rep(NA, length(x))
-  result[!is.na(x) & is.finite(x)] <- cycle_clean
-  return(result)
-}
-
-# Apply CF filter to each column separately
-# Suppress warnings since we handle missing data gracefully
-cyc <- suppressWarnings(tibble(
-  date = qpanel$date,
-  y_cyc = as.numeric(cf_x(qpanel$gdp)),
-  pce_cyc = as.numeric(cf_x(qpanel$pce)),
-  gpdi_cyc = as.numeric(cf_x(qpanel$gpdi)),
-  cbi_cyc = as.numeric(cf_level(qpanel$cbi)), # can be negative, treat as level
-  expgs_cyc = as.numeric(cf_x(qpanel$expgs)),
-  gce_cyc = as.numeric(cf_x(qpanel$gce)),
-  payems_cyc = as.numeric(cf_level(qpanel$payems)),
-  awhman_cyc = as.numeric(cf_level(qpanel$awhman)),
-  realw_cyc = as.numeric(cf_level(qpanel$realw)),
-  pi_cyc = as.numeric(cf_level(qpanel$pi_gdpdef)),
-  ff_cyc = as.numeric(cf_level(qpanel$ff)),
-  r10_cyc = as.numeric(cf_level(qpanel$r10_expost)),
-  sp500_cyc = as.numeric(cf_level(qpanel$sp500))
-))
-
-# Cross-correlation table with leads/lags -6..+6
-lag_leads <- -6:6
-
-ccf_row <- function(x, y, lags = lag_leads) {
-  # Remove NAs from both series
-  valid <- complete.cases(x, y)
-  x_clean <- x[valid]
-  y_clean <- y[valid]
-  
-  # Check for sufficient data
-  if (length(x_clean) < 30) {
-    warning(paste("Insufficient data for cross-correlation:", length(x_clean), "observations"))
-    return(rep(NA, length(lags)))
-  }
-  
-  vapply(lags, function(ell) {
-    n <- length(x_clean)
-    if (abs(ell) >= n - 5) return(NA)  # Need at least 5 observations
-    
-    if (ell > 0) {
-      # Positive lag: x leads y by ell periods
-      cor(x_clean[1:(n - ell)], y_clean[(1 + ell):n], use = "complete.obs")
-    } else if (ell < 0) {
-      # Negative lag: y leads x by |ell| periods
-      ellp <- abs(ell)
-      cor(x_clean[(1 + ellp):n], y_clean[1:(n - ellp)], use = "complete.obs")
-    } else {
-      # Zero lag: contemporaneous correlation
-      cor(x_clean, y_clean, use = "complete.obs")
-    }
-  }, numeric(1))
-}
-
-series <- names(cyc)[-c(1, 2)]
-
-rows <- suppressWarnings(lapply(series, function(s) {
-  y <- cyc$y_cyc  # GDP is y, series is x for correlation
-  x <- cyc[[s]]    # The series we're correlating with GDP
-  cc <- ccf_row(y, x, lag_leads)  # Pass GDP first, series second
-  valid <- complete.cases(x, y)
-  sdrel <- if (sum(valid) >= 2) sd(x[valid]) / sd(y[valid]) else NA_real_  # pairwise SD relative to GDP SD
-  tibble(series = s, stddev_rel_to_y = sdrel, lag = lag_leads, corr = cc)
-}))
-
-ccf_tbl <- bind_rows(rows) |>
-  mutate(series = recode(series,
-    pce_cyc = "Consumption",
-    gpdi_cyc = "Investment",
-    cbi_cyc = "Inventory investment",
-    expgs_cyc = "Exports",
-    gce_cyc = "Government purchases",
-    payems_cyc = "Employment",
-    awhman_cyc = "Average weekly hours",
-    realw_cyc = "Real wage",
-    pi_cyc = "Inflation (GDP deflator)",
-    ff_cyc = "Federal funds rate",
-    r10_cyc = "Ex-post real 10y rate",
-    sp500_cyc = "S&P 500"
-  ))
-
-# Reshape to wide table for LaTeX
-wide <- ccf_tbl |>
-  mutate(lag = as.character(lag)) |>
-  dplyr::select(series, stddev_rel_to_y, lag, corr) |>
-  pivot_wider(names_from = lag, values_from = corr) |>
-  arrange(series)
-
-# Round for presentation
-wide_print <- wide |>
-  mutate(across(where(is.numeric), ~ round(.x, 2)))
-
-# Fix column names for LaTeX (escape underscores)
-names(wide_print)[names(wide_print) == "stddev_rel_to_y"] <- "StdDev"
-
-# Write LaTeX table
-tab <- xtable(wide_print,
-  caption = paste0(
-    "Cross-correlations of cyclical components with output, ",
-    "leads and lags -6..6 quarters. Std Dev is relative to cyclical GDP."
-  ),
-  label = "tab:ccf"
-)
-
-# Set alignment dynamically based on number of columns
-align(tab) <- paste0("l", paste(rep("r", ncol(wide_print)), collapse = ""))
-print(tab,
-  file = "tables/table_ccf.tex",
-  include.rownames = FALSE,
-  caption.placement = "top",
-  sanitize.text.function = identity
-)
-
-# -----------------------------------------------------------------------------
-# Monetary VAR: IRFs to an FF shock
-# Using proper bias correction methods:
-# 1. Degrees of freedom adjustment for covariance matrix
-# 2. Wild bootstrap for heteroskedasticity-robust inference
-# -----------------------------------------------------------------------------
-
-# Monthly data and transformations
-indpro <- fred_m("INDPRO", start = as.Date("1959-01-01"))
-cpi_m <- fred_m("CPIAUCSL", start = as.Date("1959-01-01"))
-pcom <- fred_m("PPIACO", start = as.Date("1959-01-01"))
-ff <- fred_m("FEDFUNDS", start = as.Date("1959-01-01"))
-totres <- fred_m("TOTRESNS", start = as.Date("1959-01-01"))
-m2 <- fred_m("M2SL", start = as.Date("1959-01-01"))
-
-monthly <- reduce(
-  list(indpro, cpi_m, pcom, ff, totres, m2),
-  ~ full_join(.x, .y, by = "date")
-)
-
-names(monthly) <- c("date", "indpro", "cpi", "pcom", "ff", "totres", "m2")
-
-monthly <- monthly |>
-  mutate(
-    y = log(indpro),
-    p = log(cpi),
-    pcom = log(pcom),
-    tr = log(totres),
-    m2 = log(m2),
-    ff = ff
-  ) |>
-  dplyr::select(date, y, p, pcom, ff, tr, m2) |>
-  drop_na()
-
-# baseline sample - can extend beyond 2007 (M1 definitional issues avoided)
-monthly_sub <- monthly |>
-  filter(date >= as.Date("1965-01-01"))
-
-# Estimate VAR with 12 lags
-v <- vars::VAR(
-  monthly_sub |>
-    dplyr::select(y, p, pcom, ff, tr, m2),
-  p = 12, type = "const"
-)
-
-# Apply degrees of freedom correction to covariance matrix
-# Based on Brüggemann et al. (2011) - addresses bootstrap bias
-T_obs <- nrow(v$y)  # Number of observations used
-K <- v$K  # Number of variables  
-p <- v$p  # Number of lags
-k_params <- K * p + 1  # Parameters per equation (K*p lags + intercept)
-
-# Degrees of freedom corrected covariance matrix
-# Standard vars package uses T, but T/(T-k) correction reduces bias
-df_correction <- T_obs / (T_obs - k_params)
-
-# Get the original covariance matrix
-cov_orig <- summary(v)$covres
-
-# Apply correction
-cov_corrected <- cov_orig * df_correction
-
-# Update the VAR object's covariance matrix for IRF calculation
-v$covres <- cov_corrected
-
-# Also update each equation's sigma for consistency
-var_names <- colnames(v$y)
-for (i in 1:K) {
-  v$varresult[[i]]$sigma <- sqrt(cov_corrected[var_names[i], var_names[i]])
-}
-
-# Calculate scaling for 100bp shock
-sd_ff <- sqrt(cov_corrected["ff", "ff"])
-scale <- 1.00 / sd_ff
-
-# Compute IRF with standard bootstrap but using corrected covariance
-# The degrees of freedom correction improves bootstrap coverage
-set.seed(12345)
-ir <- irf(v,
-  impulse = "ff",
-  response = c("y", "p", "pcom", "tr", "m2", "ff"),
-  n.ahead = 60,
-  ortho = TRUE,    # Orthogonalized (Cholesky) IRF  
-  boot = TRUE,     # Bootstrap confidence intervals
-  ci = 0.68,       # 68% confidence intervals (1 std error)
-  runs = 1000      # More runs for stability
-)
-
-# Extract and scale IRF results
-tidy_ir <- function(ir_obj, var) {
-  point <- ir_obj$irf$ff[, var] * scale
-  low <- ir_obj$Lower$ff[, var] * scale
-  high <- ir_obj$Upper$ff[, var] * scale
-  
-  tibble(
-    h = seq_along(point) - 1,  # h starts at 0
-    irf = point,
-    low = low,
-    high = high,
-    variable = var
-  )
-}
-
-# Create tidy dataframe for plotting
-vars_list <- c("y", "p", "pcom", "tr", "m2", "ff")
-irf_df <- bind_rows(lapply(vars_list, function(vname) tidy_ir(ir, vname)))
-
-labels <- c(
-  y = "Industrial production (log)",
-  p = "CPI (log)",
-  pcom = "Commodity prices (log)",
-  tr = "Total reserves (log)",
-  m2 = "M2 (log)",
-  ff = "Federal funds rate"
-)
-
-irf_df$label <- labels[irf_df$variable]
-
-p_irf <- ggplot(irf_df, aes(h, irf)) +
-  geom_ribbon(aes(ymin = low, ymax = high), fill = color_highlight, alpha = 0.25) +
-  geom_hline(yintercept = 0, linewidth = 0.5, linetype = "dashed", color = "gray40") +
-  geom_line(linewidth = 1.0, color = color_secondary) +
-  facet_wrap(~label, scales = "free_y", ncol = 3) +
-  labs(
-    x = "Months After Shock", y = "Response",
-    title = "Impulse Responses to 100bp Federal Funds Rate Shock",
-    subtitle = "VAR with Degrees of Freedom Adjusted Covariance (1965-2007), 68% Bootstrap CI"
-  ) +
-  theme_publication(base_size = 11) +
-  theme(strip.text = element_text(size = rel(0.9)),
-        panel.spacing = unit(1, "lines"))
-
-ggsave("figures/fig_mp_irf_grid.svg", p_irf,
-  width = 12, height = 8, units = "in", dpi = 300
-)
-ggsave("figures/fig_mp_irf_grid.pdf", p_irf,
-  width = 12, height = 8, units = "in", dpi = 300
-)
-
-message("All figures saved in figures/ and table saved in tables/table_ccf.tex")
+message("All figures saved in figures/")
