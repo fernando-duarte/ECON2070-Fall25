@@ -5,6 +5,7 @@ CLAUDE.md
 **/CLAUDE.md
 MATHPIX_CLEANUP.md
 .Renviron
+cleanup_math.py
 
 # LaTeX temporary files
 *.aux
