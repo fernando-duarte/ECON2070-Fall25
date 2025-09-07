@@ -3,6 +3,7 @@ Resources/
 C*.md
 CLAUDE.md
 **/CLAUDE.md
+MATHPIX_CLEANUP.md
 .Renviron
 
 # LaTeX temporary files
